@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>5ターン勇者</title>
+    <!-- アイコンは持たない。空を宣言しておき、ブラウザが /favicon.ico を取りに行って404を出すのを止める。 -->
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- 9:16の縦画面が基準。PCでは中央に置いて左右は余白にする。 -->
+    <main id="app" class="app" aria-live="polite"></main>
+
+    <!-- 読み込み順は tests/test-runner.html と同じ。src を足したら両方へ1行足す。 -->
+    <script src="src/namespace.js"></script>
+    <script src="src/random-service.js"></script>
+
+    <script src="src/catalog/constants.js"></script>
+    <script src="src/catalog/enemy-catalog.js"></script>
+    <script src="src/catalog/stage-catalog.js"></script>
+    <script src="src/catalog/equipment-catalog.js"></script>
+    <script src="src/catalog/gacha-catalog.js"></script>
+    <script src="src/catalog/reward-catalog.js"></script>
+
+    <script src="src/domain/battle-effects.js"></script>
+    <script src="src/domain/battle-calculator.js"></script>
+    <script src="src/domain/equipment-effect-types.js"></script>
+    <script src="src/domain/equipment-effect-definitions.js"></script>
+    <script src="src/domain/equipment-effect-engine.js"></script>
+    <script src="src/domain/battle-session.js"></script>
+    <script src="src/domain/progression-state.js"></script>
+    <script src="src/domain/economy-state.js"></script>
+    <script src="src/domain/record-state.js"></script>
+    <script src="src/domain/reward-service.js"></script>
+    <script src="src/domain/gacha-service.js"></script>
+
+    <script src="src/save/save-data.js"></script>
+    <script src="src/save/save-repository.js"></script>
+
+    <script src="src/assets/asset-catalog.js"></script>
+    <script src="src/audio/audio-manager.js"></script>
+
+    <script src="src/ui/ui-content.js"></script>
+    <script src="src/ui/dom.js"></script>
+    <script src="src/ui/app-controller.js"></script>
+    <script src="src/ui/app-view.js"></script>
+
+    <script>
+      // 起動。ここだけが画面を組み立て始める。テスト（test-runner.html）はこの行を読まない。
+      (function () {
+        "use strict";
+        const { AppController, AppView } = globalThis.FiveTurnHero;
+        const controller = new AppController();
+        const view = new AppView({ controller, root: document.getElementById("app") });
+        controller.start();
+        view.render();
+
+        // BGMの予約。音源が無ければ鳴らないし、最初のユーザー操作までは待つ
+        //（iOS/Safari/Chrome は操作より前の再生を許さない）。
+        controller.startBgm();
+        const unlock = () => controller.unlockAudio();
+        document.addEventListener("pointerdown", unlock, { once: true });
+        document.addEventListener("keydown", unlock, { once: true });
+
+        // 背面へ回るとき・閉じるときに最後の保存をしておく（ロジック仕様書 16）。
+        const saveOnLeave = () => controller.saveOnBackground();
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "hidden") {
+            saveOnLeave();
+            controller.suspendAudio(); // BGMは止める。SEは途中でも追わない
+          } else {
+            controller.resumeAudio();
+          }
+        });
+        globalThis.addEventListener("pagehide", saveOnLeave);
+      })();
+    </script>
+  </body>
+</html>

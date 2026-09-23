@@ -1,0 +1,2568 @@
+/*
+  5ターン勇者の画面。スマートフォン縦画面（9:16）が基準。
+  PCでは中央に縦長の領域を置き、左右は余白にする（UI仕様書 00）。
+  黒・濃紺に金縁、重要ボタンは赤、補助操作は青。
+  正式アートはまだ1枚も無い。画像が無いときの枠もここで持ち、
+  assets/ へファイルを置けばそのまま絵に替わる（Phase 13のAsset Catalog）。
+*/
+
+:root {
+  --ink: #f4efe2;
+  --ink-dim: #b9b0a0;
+  --bg: #07080f;
+  --panel: #10131f;
+  --panel-edge: #2a2f45;
+  --gold: #c9a227;
+  --red: #b4272c;
+  --blue: #2f5aa8;
+  --gap: 12px;
+  --radius: 10px;
+
+  /* 敵の絵の基準の大きさを決める1か所。
+     バトル画面の敵は .battle-tap の内側いっぱいに広がるので、Chargeが始まる前の
+     等倍の大きさは「画面の内容幅 − この内側の余白」で決まる。
+     バトル前の敵（.prep-enemy）も同じ式を使って同じ大きさにする。
+     **Chargeの倍率・時間はここには関係しない**（transform だけで、この値は動かない）。 */
+  --battle-tap-pad: 8px;
+  --battle-tap-border: 1px;
+  --battle-tap-inset: calc(var(--battle-tap-pad) + var(--battle-tap-border));
+
+  /* レア度。全体の黒＋濃紺＋金縁を崩さない範囲で、上へ行くほど強くする。 */
+  --rarity-n: #6f7687;
+  --rarity-r: #9fb4d8;
+  --rarity-sr: #5f86e0;
+  --rarity-ssr: #a46ae0;
+  --rarity-ur: #c9a227;
+  --rarity-legend: #e0533c;
+
+  /* 戦闘の演出時間。ここを変えればテンポが変わる（View が読む）。
+     軽く・速くを優先して Phase 13 で詰めた。ロジックはこの値に依存しない。
+     チャージだけは正式SEが来たので、**音源の `ended` が本来の合図**。
+     下の2つは「音が鳴らなかったとき」と「音が終わらなかったとき」の保険で、
+     音源ごとの秒数（4秒 / 5秒 / 2.5秒）はここにもJSにも並べない。 */
+  --charge-duration: 260ms;
+  --charge-safety: 7000ms;
+  --extra-duration: 800ms;
+  --result-duration: 560ms;
+  /* 見た目だけの時間。JSは読まない。 */
+  --critical-flash: 260ms;
+  /* 大きな「MISS」を見せる時間。音源（約0.34秒）より少しだけ長い。 */
+  --miss-flash: 400ms;
+  /* 倒された敵が点滅して消えるまで。撃破の演出（約0.32〜0.64秒）と並行に走る。 */
+  --enemy-defeat: 420ms;
+  --miss-duration: 180ms;
+
+  /* ガチャの演出時間。 */
+  --gacha-chest-in: 420ms;
+  --gacha-open: 520ms;
+  --gacha-result: 280ms;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  /* iOS WebView：ダブルタップのズームと、そのための待ち時間を作らない。 */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.6 system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+  /* 横スクロールを作らない。iOSのWebViewでもはみ出さないこと。 */
+  overflow-x: hidden;
+}
+
+body {
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+}
+
+/* 9:16。画面が横長なら高さに合わせ、縦長なら幅いっぱいまで。 */
+.app {
+  width: min(100vw, calc(100vh * 9 / 16));
+  max-width: 480px;
+  min-height: 100%;
+  padding: max(12px, env(safe-area-inset-top)) 16px max(12px, env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, #0b0e1a 0%, #07080f 100%);
+  border-left: 1px solid var(--panel-edge);
+  border-right: 1px solid var(--panel-edge);
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* スクロールバーのぶんの幅を**常に**確保する。出たり消えたりで内容幅が変わると、
+     同じ式で出しているはずの敵の絵（バトル前とバトル中）の大きさがずれる。
+     オーバーレイ表示の端末（iOS/Android）では 0 なので、そちらには影響しない。 */
+  scrollbar-gutter: stable;
+}
+
+/* ゲームの画面では文字を選ばせない・絵を引っ張らせない（スマホゲームの手触り）。
+   画面の根元に1回だけ掛けて中へ継承させる。長押しの「画像を保存」メニューも出さない。
+   ドラッグの開始そのものは AppView が dragstart で止める（CSSが効かない環境の保険）。 */
+.app {
+  -webkit-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.app img {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* 入力の部品だけは今までどおり（OPTIONのスライダー・セレクト、将来の文字入力）。 */
+.app input,
+.app textarea,
+.app select,
+.app option,
+.app [contenteditable="true"] {
+  -webkit-user-select: auto;
+  -ms-user-select: auto;
+  user-select: auto;
+  -webkit-touch-callout: default;
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-height: 100%;
+}
+
+.title {
+  margin: 8px 0 0;
+  font-size: 1.5rem;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+  /* 長い見出しでも横へあふれない。 */
+  overflow-wrap: anywhere;
+}
+
+.lead, .body, .quote { margin: 0; color: var(--ink-dim); overflow-wrap: anywhere; }
+.quote { font-size: 0.9rem; font-style: italic; }
+.step-count { margin: 0; color: var(--gold); font-size: 0.85rem; letter-spacing: 0.1em; }
+
+.diamonds {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--gold);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- ボタン --------------------------------------------------------------- */
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  /* 指で押せる大きさを確保する。 */
+  min-height: 44px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+button.primary { background: var(--red); border-color: var(--gold); }
+button.secondary { background: var(--blue); border-color: var(--panel-edge); }
+button.ghost { background: transparent; color: var(--ink-dim); }
+button:disabled { opacity: 0.4; cursor: default; }
+
+.menu, .choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.choices { margin-top: auto; }
+
+/* --- HOME ----------------------------------------------------------------- */
+
+/*
+  上から「見出しとダイヤ」「真ん中の絵」「大ボタン」「小ボタン」の4段。
+  絵の段だけが伸び縮みするので、狭い端末ではそこが縮み、ボタンは押せる
+  大きさのまま画面内に収まる。
+*/
+
+/*
+  HOMEは「絵の上にUIを重ねる」。絵は画面の端まで広げ、ボタンはその下半分へ
+  グラデーション越しに乗せる。**タイトルは絵の中にある**ので画面には出さない。
+*/
+/*
+  段と段のあいだ。**枠の絵は上下に透明な余白を持っている**ので、CSSのgapをそのまま
+  足すと見た目の隙間が二重になって間延びする。HOMEだけ gap を詰め、絵の余白ぶんで
+  「ひとつのメニュー群」に見えるところまで寄せる（他の画面は var(--gap) のまま）。
+*/
+.screen[data-screen="HOME"] {
+  position: relative;
+  gap: 6px;
+}
+
+/* ボタンの下敷き。絵の下側を暗く落として文字を読めるようにするだけで、
+   ベタ塗りにはしない（絵が死なない濃さで止める）。 */
+.screen[data-screen="HOME"]::before {
+  content: "";
+  position: absolute;
+  left: -16px;
+  right: -16px;
+  bottom: calc(-1 * max(12px, env(safe-area-inset-bottom)));
+  height: 62%;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgba(7, 8, 15, 0) 0%,
+    rgba(7, 8, 15, 0.55) 34%,
+    rgba(7, 8, 15, 0.88) 66%,
+    rgba(7, 8, 15, 0.97) 100%
+  );
+}
+
+/* ボタンは下敷きより前。押せる場所が絵に埋もれない。 */
+.home-menu, .home-list, .home-corner { position: relative; z-index: 1; }
+
+/* 所持ダイヤ。絵の右上、**タイトルの下・顔の横**へ置く。
+   中央には掛からないので、タイトルにも顔にもぶつからない。 */
+.home-visual > .diamonds {
+  position: absolute;
+  /* 絵のタイトル（「5ターン勇者」）の下。宝石の枠になって縦に大きくなったぶん、
+     少しだけ下げてタイトルの光に掛からないようにする。 */
+  top: 22%;
+  right: 12px;
+  z-index: 2;
+  margin: 0;
+  padding: 5px 9px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  background: rgba(7, 8, 15, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+/* 正式な宝石の枠が置かれたら、CSSの枠と下敷きは外して絵だけにする。 */
+.home-visual > .diamonds[data-art="true"] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(40vw, 150px);
+  padding: 0;
+  border: 0;
+  background: none;
+  backdrop-filter: none;
+}
+
+.diamond-frame {
+  display: block;
+  width: 100%;
+  height: auto; /* 元の縦横比のまま */
+}
+
+/* 数字は宝石の中央へ。宝石が明るいので、字は濃い色にする。 */
+.diamonds[data-art="true"] > .diamond-count {
+  position: absolute;
+  left: 9%;
+  right: 9%;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.3em;
+  text-align: center;
+  line-height: 1;
+}
+
+/* 「ダイヤ」は添え字。数字が主役なので小さく、宝石に溶けない濃い紺。 */
+.diamonds[data-art="true"] .diamond-label {
+  color: #06263d;
+  font-size: 0.62rem;
+  font-weight: bold;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* 数字は白く大きく、濃紺の縁取りと影でシアンの飾りから浮かせる。 */
+.diamonds[data-art="true"] .diamond-value {
+  color: #ffffff;
+  font-size: 1.1rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  text-shadow:
+    -1px -1px 0 #06263d, 1px -1px 0 #06263d, -1px 1px 0 #06263d, 1px 1px 0 #06263d,
+    0 2px 3px rgba(0, 20, 40, 0.8);
+}
+
+/* 主役の絵。**画面の端まで広げ**、左右の余白ごと外へ逃がす。
+   縦横比は元画像と同じ 2:3 なので、引き伸ばしも切り落としも起きない。
+   画面が低いときだけ max-height が効いて、下（刃の先）から切れる。 */
+.home-visual {
+  position: absolute;
+  top: calc(-1 * max(12px, env(safe-area-inset-top)));
+  left: -16px;
+  right: -16px;
+  aspect-ratio: 2 / 3;
+  max-height: 86%;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.home-hero {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+}
+
+/* 正式な絵が置かれるまでの枠。剣を顔の前へ立てた姿を、線だけで示しておく。
+   文字は載せない（置き換えたときに消し忘れないように）。
+   枠は**外側**に描き、読み込めなかった画像そのものは隠す。 */
+.home-hero[data-fallback="true"] { display: none; }
+
+.home-visual[data-fallback="true"] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.home-visual[data-fallback="true"]::before {
+  content: "";
+  height: 88%;
+  aspect-ratio: 3 / 4;
+  max-width: min(56vw, 210px);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(var(--gold), var(--gold)) center 22% / 3px 46% no-repeat,
+    radial-gradient(circle at 50% 20%, rgba(201, 162, 39, 0.5) 0 6px, transparent 7px),
+    linear-gradient(var(--panel-edge), var(--panel-edge)) center 66% / 46px 3px no-repeat,
+    var(--panel);
+  opacity: 0.6;
+}
+
+/*
+  バトルの段。HOMEでいちばん押してほしいので、ここだけ赤枠で横いっぱい。
+  裏（HARD）と神（GOD）はこのボタンの中（バトルモード）へ入ったので、HOMEには出ない。
+  絵が絶対配置になったぶん、余った高さはここが受け取ってボタン群を画面の下へ寄せる。
+*/
+.home-menu {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+button.home-main {
+  min-height: 48px;
+  font-weight: bold;
+  letter-spacing: 0.04em;
+}
+
+/* 裏（HARD）も同じ赤枠。色は変えず、文字だけで区別する。 */
+button.home-main[data-route="back"]:not([data-art="true"]) { background: #7d1f24; }
+
+/* 神（GOD）は専用の黄枠。 */
+button.home-special {
+  min-height: 48px;
+  font-weight: bold;
+  letter-spacing: 0.04em;
+}
+
+/* バトルモード。HOMEの上へ重ねるだけ。3つを縦に並べる。 */
+.home-modes { width: min(92vw, 300px); }
+.mode-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+
+/* 未解放のモードは押せない。**解放条件はProgressionのまま**で、見た目だけ落とす。 */
+.mode-list button.locked { filter: grayscale(0.5) brightness(0.55); }
+
+/* アーカイブ。図鑑とRECORDをタブで切り替える（中身は既存のものをそのまま出す）。 */
+.archive-body { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
+
+/* タブは見た目だけ。選択中は金枠・金文字で少し明るく、未選択は黒紺に薄い青銀の枠。 */
+.archive-tabs {
+  justify-content: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.filters.archive-tabs button {
+  flex: 1 1 0;
+  max-width: 160px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid rgba(150, 172, 214, 0.34);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #0e1424 0%, #080b15 100%);
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: bold;
+  letter-spacing: 0.06em;
+}
+.filters.archive-tabs button.active {
+  border-color: var(--gold);
+  color: var(--gold);
+  background: linear-gradient(180deg, #2a2412 0%, #15130c 100%);
+  box-shadow: 0 0 8px rgba(201, 162, 39, 0.25), inset 0 1px 0 rgba(255, 230, 150, 0.12);
+}
+
+/* 図鑑・RECORDの「戻る」は横に長すぎるので、幅を画面の8割ほどへ抑えて中央へ。
+   押せる高さ（48px）は back-button の指定のまま。 */
+.screen[data-screen="ARCHIVE"] > .choices button.back-button[data-art="true"],
+.screen[data-screen="RECORD"] > .choices button.back-button[data-art="true"],
+.screen[data-screen="ENCYCLOPEDIA"] > .choices button.back-button[data-art="true"] {
+  width: min(78%, 320px);
+  margin-inline: auto;
+}
+
+/* 記録を見る（クリア後だけ出る1本）。2列に混ぜず、これまでどおり横いっぱい。 */
+button.home-ending {
+  min-height: 54px;
+  font-size: 1.05rem;
+  font-weight: bold;
+}
+
+/*
+  主要導線の残り3つ。縦一列。バトルより一段細くして「次に押すもの」に見せる。
+  絵が上下に透明な余白を持っているぶん、gap は控えめでちょうど良い間隔になる。
+  幅を絞ったぶん**右下に歯車を置く余白**が生まれるので、OPTIONはそこへ収まる。
+*/
+.home-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.home-list > button {
+  /* 3つとも同じ横幅。狭い端末ほど絵が縦に潰れないよう、幅で高さを決める。
+     calc の項は**右下の歯車ぶんの余白**（左右に56pxずつ）を必ず空けるためのもの。
+     ここが効いているかぎり、歯車はどの幅でもボタンに重ならない。 */
+  width: min(63%, calc(100% - 116px));
+}
+
+button.home-small {
+  min-height: 48px;
+  font-size: 0.95rem;
+  /* 英語表記でも折り返して崩れないようにする。 */
+  padding: 10px 8px;
+  line-height: 1.2;
+}
+
+/* OPTIONの置き場。縦一列の右の余白へ、いちばん下のボタンと底を合わせて置く。
+   段として積まないので、絵の見える高さをここで削らない。 */
+.home-corner {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+}
+
+/* --- HOMEの正式ボタン画像 ------------------------------------------------- */
+
+/*
+  枠も色も**絵が持っている**ので、絵が載ったボタンからはCSSの下地（赤/青のベタ・
+  border・影）を外す。data-art は絵が実際に読めたときだけ立ち、404 になれば外れて
+  上のCSSのボタンへそのまま戻る。
+  絵を台座にするボタン（HOMEの各種・ガチャの引くボタン）で共通の作り。
+*/
+.screen button[data-art="true"] {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  /* 押した感じだけ短く返す。絵は変形させない。 */
+  transition: transform 90ms ease-out;
+}
+
+.screen button[data-art="true"]:active { transform: scale(0.97); }
+
+/* ダイヤが足りないときは押せない。絵になっても**押せる／押せない**が分かるように、
+   暗く・彩度を落とす（押せない状態そのものは既存の disabled のまま）。 */
+.screen button[data-art="true"]:disabled {
+  filter: grayscale(0.45) brightness(0.6);
+  transform: none;
+}
+
+/* 枠の絵。**縦横比はそのまま**で、四隅の宝石も金属枠も潰さない。 */
+.home-button-art {
+  display: block;
+  width: 100%;
+  height: auto;
+  pointer-events: none;
+}
+
+/* 文字は絵の中の色が付いた面へ重ねる。枠にも四隅の宝石にも掛からない位置。 */
+.home-button-label {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: 21%;
+  bottom: 20%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  /* 折り返さない。狭い端末では字を少し小さくして収める。 */
+  white-space: nowrap;
+  line-height: 1.05;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+/* 名前とSTAGEの2行。横並びで幅が狭いので、1行に伸ばさず縦へ積む。 */
+.home-button-name { font-size: clamp(0.76rem, 2.9vw, 1rem); }
+
+.home-button-stage {
+  font-size: clamp(0.58rem, 2.2vw, 0.78rem);
+  font-weight: normal;
+  letter-spacing: 0.06em;
+  opacity: 0.92;
+}
+
+/* 赤枠・黄枠。文字の面は枠の内側へ取る。 */
+button.home-main[data-art="true"],
+button.home-special[data-art="true"] {
+  /* 320幅では絵が約43pxまで縮む。指で押せる高さはここで確保する。 */
+  min-height: 48px;
+}
+
+/* 黄枠は面が明るいので、字は白ではなく濃い色にする（宝石のダイヤと同じ考え方）。
+   1行なので名前の行と同じ大きさにし、英語（THE IDLE GOD）でも320幅に収める。 */
+button.home-special[data-art="true"] > .home-button-label {
+  color: #3a2402;
+  font-size: clamp(0.76rem, 2.9vw, 1rem);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+button.home-small[data-art="true"] {
+  min-height: 48px;
+}
+
+button.home-small[data-art="true"] > .home-button-label {
+  top: 15%;
+  bottom: 18%;
+  font-size: clamp(0.8rem, 3vw, 0.95rem);
+}
+
+/*
+  縦一列の3つ。**外形を揃える**ために枠の比率をここで決め、絵はその中へ収める
+  （絵そのものは伸ばさない）。3枚とも 900×286 なので、いまは余白なくぴたりと入る。
+*/
+.home-list button[data-art="true"] {
+  aspect-ratio: 900 / 286;
+  min-height: 48px;
+}
+
+.home-list button[data-art="true"] > .home-button-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* 縦横比はそのまま。入りきらないぶんは上下に余白として残す。 */
+  object-fit: contain;
+}
+
+/* 飾りに負けない字にする。バトルはいちばん大きく、下3つはそれより一段小さく、
+   それでも以前の2列のときより大きい。日本語でも英語でも1行で読める大きさ。 */
+.home-menu button.home-main[data-art="true"] > .home-button-label {
+  font-size: clamp(1.45rem, 6.6vw, 1.85rem);
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  /* 字間は最後の字の右にも付くので、同じだけ左へ足して見た目の中央を合わせる。 */
+  padding-left: 0.14em;
+  text-shadow: 0 2px 0 rgba(60, 0, 0, 0.85), 0 3px 8px rgba(0, 0, 0, 0.9);
+}
+
+.home-list button[data-art="true"] > .home-button-label {
+  top: 17%;
+  bottom: 19%;
+  font-size: clamp(1rem, 4vw, 1.2rem);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #f4f7ff;
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.9);
+}
+
+/*
+  OPTION。歯車ひとつを右下へ。主要導線より**小さく・控えめ**に見せる。
+  絵の明るいところへ乗るので、歯車と文字が沈まないよう薄い下敷きを敷く
+  （枠を持つ他のボタンと違い、歯車には下地が無いぶんここで補う）。
+*/
+button.home-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 56px;
+  /* 他のボタンよりは小さく。それでも指で押せる大きさは保つ。 */
+  min-height: 52px;
+  padding: 4px;
+}
+
+.screen[data-screen="HOME"] button.home-option[data-art="true"] {
+  background: rgba(7, 8, 15, 0.5);
+  border-radius: var(--radius);
+  backdrop-filter: blur(2px);
+}
+
+.home-option-art {
+  display: block;
+  width: 30px;
+  height: 30px;
+  pointer-events: none;
+}
+
+button.home-option > .home-button-label {
+  position: static;
+  font-size: 0.6rem;
+  font-weight: normal;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+/* --- バトル前 ------------------------------------------------------------- */
+
+/* 敵が大きくなったぶん、まわりの余白は詰める。**出すものは減らさない。** */
+.screen[data-screen="BATTLE_PREP"] { gap: 4px; }
+
+/* 背景が入ったぶんの読みやすさ調整。**大きさも並びも変えない。**
+   上のヘッダとTURNの札はもともと不透明なので、そのままで読める。 */
+.screen[data-screen="BATTLE_PREP"] > .quote {
+  color: var(--ink);
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95), 0 0 12px rgba(0, 0, 0, 0.7);
+}
+
+/* 「戻る」は透ける作りなので、背景の上では薄い下地を入れて読ませる。 */
+.screen[data-screen="BATTLE_PREP"] .choices button.ghost:not([data-art="true"]) {
+  background: rgba(7, 8, 15, 0.66);
+  border-color: var(--panel-edge);
+  color: var(--ink);
+  backdrop-filter: blur(2px);
+}
+
+/* 敵の絵の下地。背景が入る前はベタの暗い円だったが、それだと背景を四角く隠してしまう。
+   **大きさも位置も縦横比もそのまま**に、中心だけ軽く落として敵を浮かせる。
+   バトル前とバトル中で同じにして、始めた瞬間に下地だけが変わって見えないようにする
+   （溜めズームも撃破FXもMISSも、これまでどおり）。 */
+.screen[data-screen="BATTLE_PREP"] .prep-enemy,
+.screen[data-screen="BATTLE"] .battle-enemy {
+  background: radial-gradient(circle at 50% 58%, rgba(5, 8, 18, 0.55) 0%, rgba(5, 8, 18, 0) 68%);
+}
+.screen[data-screen="BATTLE_PREP"] > .choices { gap: 4px; }
+.screen[data-screen="BATTLE_PREP"] > .choices button { min-height: 44px; padding: 8px 14px; }
+
+.prep-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.prep-header .stage, .prep-header .resistance { color: var(--gold); font-size: 0.85rem; white-space: nowrap; }
+/* 敵名が長くても他を押し出さない。 */
+.prep-header .enemy-name { min-width: 0; overflow-wrap: anywhere; text-align: center; }
+
+/* 敵の絵。img でも placeholder の枠でも同じ大きさ・同じ動きになるようにする。 */
+.enemy-art {
+  display: block;
+  width: 100%;
+  height: 34vw;
+  max-height: 200px;
+  max-width: 100%;
+  border: 1px dashed var(--panel-edge);
+  border-radius: var(--radius);
+  background: radial-gradient(circle at 50% 60%, #1a1f33 0%, #0b0e1a 70%);
+  /* 絵の縦横比が何であれ、枠からはみ出さない。 */
+  object-fit: contain;
+}
+
+/* 画像が来たら枠線は不要。 */
+.enemy-art:not([data-fallback="true"]) { border-style: solid; border-color: transparent; }
+
+/* バトル前の敵。**バトル開始直後（Chargeが始まる前の等倍）と同じ大きさ**にする。
+   バトル画面の敵は .battle-tap の内側いっぱいに広がり、縦より横のほうが必ず狭いので、
+   等倍の絵は「内容幅 − --battle-tap-inset × 2」の正方形になる。ここでも同じ式を使う。
+   敵の絵は正方形（1024×1024）なので、object-fit: contain の収まり方も同じ。 */
+.prep-enemy {
+  width: calc(100% - var(--battle-tap-inset) * 2);
+  height: auto;
+  aspect-ratio: 1 / 1;
+  max-height: none;
+  /* 余った高さがあれば上下にも分ける。バトル中の敵は画面の真ん中あたりに来るので、
+     縦の位置も少しでも近づける（詰まっているときは 0 になるだけ）。 */
+  margin: auto;
+}
+
+/* --- TURN1〜5 ------------------------------------------------------------- */
+
+/* TURN1〜5は横に5つ。狭い縦画面でも1画面に収める。 */
+.turns {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+
+.turn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 2px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.turn-label { color: var(--ink-dim); font-size: 0.62rem; letter-spacing: 0.04em; }
+.turn-chance {
+  font-variant-numeric: tabular-nums;
+  color: var(--gold);
+  /* 「RANDOM」でも「100%」でも枠からはみ出さない。 */
+  font-size: clamp(0.6rem, 3.4vw, 0.95rem);
+  white-space: nowrap;
+}
+
+/* 未確定（一か八か）のときは数字扱いしない見た目にする。 */
+.turn.undetermined .turn-chance { color: var(--ink-dim); }
+.turns-block { display: flex; flex-direction: column; gap: 4px; }
+.turns-note { margin: 0; color: var(--ink-dim); font-size: 0.72rem; overflow-wrap: anywhere; }
+
+/* --- 装備 ----------------------------------------------------------------- */
+
+.slots, .equipment-box {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  /* minmax(0, 1fr) にしないと、1行で省略するつもりの効果文の min-content が
+     列幅を押し広げ、狭い端末で横スクロールが出る。 */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.slot, .equipment {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.slot.selected, .equipment.selected { border-color: var(--gold); }
+.slot.locked { opacity: 0.45; cursor: default; }
+.slot-index { color: var(--gold); font-size: 0.8rem; min-width: 1em; }
+.slot-body, .equipment-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.slot-name, .equipment-name { min-width: 0; overflow-wrap: anywhere; }
+/* 効果の要約は1行に収める。全文は詳細欄で読む。 */
+.slot-summary, .equipment-summary {
+  color: var(--ink-dim);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.slot button { min-height: 32px; padding: 4px 10px; }
+
+/*
+  5枠すべて埋まっているときの入れ替え待ち。**選べるのは上の5枠だけ**なので、
+  そこだけ枠線を明るくして薄く光らせる。装備BOXと絞り込みは触れないようにする。
+  演出は足さない（明るさの差だけで「いまここを押す」と分かれば十分）。
+*/
+.slot[data-replace-target="true"] {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px var(--gold), 0 0 10px rgba(212, 175, 55, 0.35);
+  cursor: pointer;
+}
+
+.slot[data-replace-target="true"]:hover,
+.slot[data-replace-target="true"]:active {
+  background: rgba(212, 175, 55, 0.12);
+}
+
+/* 案内・入れようとしている装備・やめる手段を、枠のすぐ上へひとまとめに置く。 */
+.replace-banner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--gold);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.replace-notice {
+  margin: 0;
+  color: var(--gold);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.replace-target-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+}
+
+.replace-target-name { overflow-wrap: anywhere; font-size: 0.85rem; }
+
+/* やめるボタンは黒銀の共通台座。狭い端末でも案内と一緒に画面へ収まる大きさ。 */
+.replace-banner button.replace-cancel { width: min(100%, 180px); }
+
+/* 入れ替え先を選んでいるあいだの装備BOX。押せないことが見て分かるだけにする。 */
+.equipment-box.input-locked { opacity: 0.5; }
+.equipment-box.input-locked .equipment { cursor: default; }
+
+.equipment-box { max-height: 30vh; overflow-y: auto; }
+/* 排出装備一覧はこの一覧が主役。余った高さを全部もらい、足りなければ自分が縮む。
+   スクロールは**一覧の中だけ**で、画面そのものは縦にはみ出さない
+   （詳細が開いて背が伸びるぶんも、ここが吸う）。 */
+#gacha-pool-list.equipment-box {
+  max-height: none;
+  flex: 1 1 auto;
+  /* 縮んでも2件ぶんは見えるようにする。 */
+  min-height: 96px;
+}
+
+/* 画面の高さを画面ぶんで打ち止めにする。こうしないと一覧が伸び切ってしまい、
+   flex が縮める余地（上の flex-shrink）が生まれない。 */
+.screen[data-screen="GACHA_POOL"] { max-height: 100%; }
+.equipped { color: var(--blue); font-size: 0.72rem; white-space: nowrap; }
+/* 排出装備一覧の「所持済み」。同名装備は複数持たないので、印だけで数は出さない。 */
+.owned { color: var(--gold); font-size: 0.72rem; white-space: nowrap; }
+.new-badge {
+  color: var(--bg);
+  background: var(--gold);
+  font-size: 0.65rem;
+  font-weight: bold;
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+/* レア度の目印。正式アイコンができたらここを差し替える。 */
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.4em;
+  min-width: 2.4em;
+  height: 2.4em;
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+  background: #05060c;
+}
+
+.icon.rarity-N { color: var(--rarity-n); border-color: var(--rarity-n); }
+.icon.rarity-R { color: var(--rarity-r); border-color: var(--rarity-r); }
+.icon.rarity-SR { color: var(--rarity-sr); border-color: var(--rarity-sr); }
+.icon.rarity-SSR { color: var(--rarity-ssr); border-color: var(--rarity-ssr); box-shadow: 0 0 4px rgba(164, 106, 224, 0.4); }
+.icon.rarity-UR { color: var(--rarity-ur); border-color: var(--rarity-ur); box-shadow: 0 0 6px rgba(201, 162, 39, 0.45); }
+.icon.rarity-LEGEND {
+  color: #fff3d0;
+  border-color: var(--rarity-ur);
+  background: linear-gradient(135deg, #5a1d16 0%, #2a1c06 60%, #6b4d06 100%);
+  box-shadow: 0 0 8px rgba(224, 83, 60, 0.5);
+}
+
+.icon { position: relative; overflow: hidden; }
+
+/* 正式アイコンは目印の上に重ねる。無ければレア度の略号がそのまま見える。 */
+.icon-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.icon-mark { line-height: 1; }
+
+/* 正式アイコンが載ったら、レア度の略号は左下の小さな札へ寄せて絵を隠さない。
+   一覧と10連の結果ではこの略号だけがレアを伝えているので、消さずに残す。
+   札の文字サイズは .icon の 2.4em（= .icon 自身の font-size 基準）に影響しないので、
+   絵が入っても行の高さもアイコンの大きさも変わらない。
+   404 のときは View が data-art を外し、枠いっぱいの略号へ戻る。 */
+.icon[data-art="true"] .icon-mark {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  z-index: 1;
+  padding: 0 2px;
+  font-size: 0.5rem;
+  border-radius: 0 4px 0 4px;
+  background: rgba(5, 6, 12, 0.82);
+}
+
+.icon.empty-icon, .icon.locked-icon { color: var(--ink-dim); border-style: dashed; }
+
+.current-enemy { margin: 0; color: var(--ink-dim); font-size: 0.78rem; overflow-wrap: anywhere; }
+.notice { margin: 0; color: var(--rarity-legend); font-size: 0.8rem; }
+
+.detail-head { display: flex; align-items: center; gap: 8px; }
+.detail-head .detail-name { flex: 1; min-width: 0; }
+
+.filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.filters button { min-height: 34px; padding: 4px 10px; font-size: 0.85rem; }
+.filters button.active { border-color: var(--gold); color: var(--gold); }
+
+.detail {
+  padding: 10px 12px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.detail.empty { color: var(--ink-dim); }
+.detail p { margin: 0 0 6px; overflow-wrap: anywhere; }
+.detail-name { color: var(--gold); }
+.detail-note { color: var(--ink-dim); font-size: 0.85rem; }
+
+.resistance-test {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px dashed var(--panel-edge);
+  border-radius: var(--radius);
+}
+
+/* 見出しは1行使い、-10 / -1 / 値 / +1 / +10 を1行に収める。 */
+.resistance-test .label {
+  flex-basis: 100%;
+  color: var(--ink-dim);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+}
+
+.resistance-test .value {
+  flex: 1;
+  min-width: 3em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.05rem;
+  color: var(--gold);
+}
+
+.resistance-test button { min-height: 34px; padding: 4px 8px; }
+
+/* --- オプション ----------------------------------------------------------- */
+
+/*
+  SOUND / BATTLE EFFECT / SYSTEM の3枚のカード。背景画像は足さず、濃紺〜黒のまま。
+  色の役割：金＝タイトルと見出し / 青＝スライダー・試聴・操作中 / 白＝本文と値 / 黒銀＝戻る。
+  **見た目だけ**で、保存・音・選択肢には触らない（中身は label.option の今までの作り）。
+*/
+.screen[data-screen="OPTIONS"] {
+  background: linear-gradient(180deg, rgba(20, 30, 58, 0.35) 0%, rgba(7, 8, 15, 0) 55%);
+  gap: 14px;
+}
+
+.option-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 12px 14px 14px;
+  border: 1px solid rgba(150, 172, 214, 0.34);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #111829 0%, #0a0e1a 100%);
+  box-shadow: inset 0 1px 0 rgba(200, 215, 245, 0.06), inset 0 -8px 16px rgba(0, 0, 0, 0.35);
+}
+
+.option-card-title {
+  margin: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(201, 162, 39, 0.25);
+  color: var(--gold);
+  font-size: 0.8rem;
+  letter-spacing: 0.16em;
+}
+
+/* 1項目。上段にラベル（右に現在値）、下段に操作部品。 */
+.option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+.option .label { color: var(--ink); font-size: 0.88rem; overflow-wrap: anywhere; }
+.option .value {
+  min-width: 3em;
+  text-align: right;
+  color: var(--ink);
+  font-weight: bold;
+  font-variant-numeric: tabular-nums;
+}
+.option .slider { grid-column: 1 / -1; }
+.option[data-kind="select"] .select { grid-column: 1 / -1; }
+.option[data-kind="select-preview"] .label { grid-column: 1 / -1; }
+
+/* スライダー。黒紺の溝に、今の値までを青く塗る（--fill は View が値から入れる）。
+   つまみは青い宝石風の丸。押せる高さは32pxとってあるので、細い溝でもつかみやすい。 */
+.option .slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: pan-y;
+}
+.option .slider::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(150, 172, 214, 0.3);
+  background:
+    linear-gradient(90deg, #2d6fd8 0%, #5cc8ff 100%) 0 0 / var(--fill, 0%) 100% no-repeat,
+    #05070e;
+  box-shadow: 0 0 6px rgba(92, 200, 255, 0.25);
+}
+.option .slider::-moz-range-track {
+  height: 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(150, 172, 214, 0.3);
+  background: #05070e;
+}
+.option .slider::-moz-range-progress {
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #2d6fd8 0%, #5cc8ff 100%);
+}
+.option .slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  margin-top: -9px;
+  border-radius: 50%;
+  border: 2px solid #d8e4f7;
+  background: radial-gradient(circle at 35% 30%, #e6f7ff 0%, #6fc4ff 30%, #1f5fc4 75%, #133b80 100%);
+  box-shadow: 0 0 8px rgba(92, 200, 255, 0.55), 0 1px 3px rgba(0, 0, 0, 0.8);
+  transition: filter 0.12s ease, box-shadow 0.12s ease;
+}
+.option .slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid #d8e4f7;
+  background: radial-gradient(circle at 35% 30%, #e6f7ff 0%, #6fc4ff 30%, #1f5fc4 75%, #133b80 100%);
+  box-shadow: 0 0 8px rgba(92, 200, 255, 0.55), 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+.option .slider:hover::-webkit-slider-thumb,
+.option .slider:active::-webkit-slider-thumb { filter: brightness(1.2); box-shadow: 0 0 12px rgba(92, 200, 255, 0.85); }
+.option .slider:focus-visible { outline: none; }
+.option .slider:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(201, 162, 39, 0.7); }
+
+/* セレクト。濃紺に細い銀枠、▼は自前で描いて見やすく。操作は標準の select のまま。 */
+.option .select {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 36px 8px 12px;
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--ink);
+  border: 1px solid rgba(190, 200, 220, 0.45);
+  border-radius: 8px;
+  background:
+    linear-gradient(45deg, transparent 50%, #cfe3ff 50%) calc(100% - 18px) 50% / 6px 6px no-repeat,
+    linear-gradient(135deg, #cfe3ff 50%, transparent 50%) calc(100% - 12px) 50% / 6px 6px no-repeat,
+    linear-gradient(180deg, #121a2e 0%, #0b1020 100%);
+  cursor: pointer;
+}
+.option .select:hover { border-color: rgba(92, 200, 255, 0.6); }
+.option .select:focus-visible {
+  outline: none;
+  border-color: #5cc8ff;
+  box-shadow: 0 0 0 2px rgba(92, 200, 255, 0.3);
+}
+.option .select option { background: #0b1020; color: var(--ink); }
+
+/* 試聴。青い小型のサブボタン（画像ボタンは縮めない）。 */
+button.option-preview {
+  min-height: 44px;
+  min-width: 5.5em;
+  padding: 6px 14px;
+  border: 1px solid #6fa6ff;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #2f64c4 0%, #1b3f86 100%);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: bold;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 0 6px rgba(92, 160, 255, 0.3);
+}
+button.option-preview:hover { filter: brightness(1.12); }
+button.option-preview:active { filter: brightness(0.92); }
+
+/* 戻るは黒銀の共通ボタン。設定より目立たせず、幅は8割ほどで中央へ。
+   下端へ張り付けず、カードのすぐ下に置く。 */
+.screen[data-screen="OPTIONS"] > .choices { margin-top: 10px; }
+.screen[data-screen="OPTIONS"] > .choices button.back-button[data-art="true"] {
+  width: min(78%, 320px);
+  margin-inline: auto;
+}
+
+.empty { color: var(--ink-dim); }
+
+/* --- 戦闘 ----------------------------------------------------------------- */
+
+/* タップを受けるのは敵と確率のまとまりだけ。ヘッダや下部には当たらない。 */
+.battle-tap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  gap: var(--gap);
+  min-height: 0;
+  /* この内側の余白が敵の等倍サイズを決める。バトル前の敵も同じ値から大きさを出す。 */
+  padding: var(--battle-tap-pad);
+  border: var(--battle-tap-border) solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.battle-tap[data-phase="READY"]:active { border-color: var(--panel-edge); }
+
+/* 敵はこの画面の主役。大きく取る。 */
+.battle-enemy {
+  height: auto;
+  flex: 1;
+  min-height: 34vh;
+  max-height: none;
+  /* 溜めズーム。倍率・時間・easing は View が音の情報から流し込む。
+     **秒数も倍率もここには書かない**（asset-catalog の CHARGE_SOUNDS が唯一の出どころ）。
+     transform だけなのでレイアウトは動かない＝STAGE・CRITICAL率・TURNを押し出さない。 */
+  transform: scale(var(--enemy-zoom, 1));
+  transform-origin: center center;
+  transition: transform var(--enemy-zoom-ms, var(--charge-duration)) var(--enemy-zoom-ease, ease-in);
+  /* 拡大中だけ合成レイヤーへ。長い溜めでもカクつかせない。 */
+  will-change: transform;
+}
+
+/* 拡大した敵が周りの文字を覆わないよう、タップ領域で切る。
+   切るのは枠の外だけで、object-fit: contain の収まり方は変えない。 */
+.battle-tap { overflow: hidden; }
+
+/* 敵の絵を包む器。撃破の演出をこの中の中央へ重ねる。
+   敵の絵が持っていた伸び方（flex:1 / min-height:34vh）をそのまま引き継ぐので、
+   STAGE・敵名・抵抗・CRITICAL率・残りTURN の位置は動かない。 */
+.battle-enemy-stage {
+  position: relative;
+  flex: 1;
+  min-height: 34vh;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.battle-enemy-stage > .battle-enemy { min-height: 0; }
+
+/* 撃破の演出。敵の中央に置き、敵の絵より前・HUDより後ろに重ねる。
+   大きさは「小さすぎず、画面外へも出ない」あたり（320で約246 / 375で約289 / 390で300）。
+   はみ出しは .battle-tap の overflow:hidden が最後に押さえる。 */
+.battle-kill-fx {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: clamp(240px, 77vw, 300px);
+  aspect-ratio: 1 / 1;
+  background-repeat: no-repeat;
+  background-color: transparent;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 敵が寄ってくると transform でスタッキング文脈ができて絵が前に出るので、
+   CRITICAL率とタップの案内は明示的にその上へ置く。**溜めの最中ほど読みたい情報**。 */
+.battle-tap > .battle-chance,
+.battle-tap > .tap-hint { position: relative; z-index: 1; }
+
+.battle-chance {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+}
+
+.battle-chance-label { color: var(--ink-dim); font-size: 0.8rem; letter-spacing: 0.14em; }
+.battle-chance-value {
+  color: var(--gold);
+  font-size: clamp(1.6rem, 9vw, 2.4rem);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.tap-hint {
+  margin: 0;
+  text-align: center;
+  color: var(--ink-dim);
+  font-size: 0.75rem;
+  letter-spacing: 0.3em;
+  animation: tap-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes tap-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.9; } }
+
+.battle-outcome {
+  margin: 0;
+  text-align: center;
+  font-size: 1.1rem;
+  letter-spacing: 0.2em;
+}
+
+/* MISS：下の行は静かなまま。大きな「MISS」は敵の上へ別に重ねる（.battle-miss）。 */
+.battle-outcome.miss {
+  color: var(--ink-dim);
+  animation: miss-fade var(--miss-duration) ease-out;
+}
+
+/* CRITICAL：強いSEと一緒に、短く光らせる。粒子演出は入れない（CSSで足りる）。
+   文字自体は白に近い色で、光は後ろへ回して読みやすさを落とさない。 */
+.battle-outcome.critical {
+  color: #fff6d8;
+  font-weight: bold;
+  font-size: 1.35rem;
+  text-shadow: 0 0 6px rgba(201, 162, 39, 0.95), 0 0 18px rgba(201, 162, 39, 0.55);
+  animation: critical-pop var(--critical-flash) ease-out;
+}
+
+/* 外したときの大きな「MISS」。敵の真ん中へ重ねる。
+   **絶対配置なので枠も HUD も動かさない**し、タップの邪魔もしない。
+   少し大きく出てから等倍へ戻り、最後に消える。長い演出は足さない。 */
+.battle-miss {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  pointer-events: none;
+  /* 画面の幅に合わせる。320でも枠からはみ出さない大きさで止める。 */
+  font-size: clamp(3rem, 22vw, 5.5rem);
+  font-weight: bold;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  color: #eaf2ff;
+  text-shadow: 0 0 10px rgba(120, 160, 220, 0.9), 0 0 26px rgba(40, 70, 130, 0.8), 0 3px 0 rgba(0, 0, 0, 0.55);
+  animation: miss-burst var(--miss-flash) ease-out forwards;
+}
+
+@keyframes miss-burst {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.62); }
+  18%  { opacity: 1; transform: translate(-50%, -50%) scale(1.12); }
+  34%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  70%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* 撃破の閃光。短く1回だけ。MISSでも敗北でも光らせない。 */
+.battle-tap[data-outcome="CRITICAL"] .battle-enemy { animation: critical-flash var(--critical-flash) ease-out; }
+
+/* 倒された敵。素早く白く光って点滅し、そのまま消える。
+   CRITICALの閃光と同じ要素に掛かるので、**閃光より後ろに・強く**書いて上書きする
+   （倒した瞬間は閃光ではなくこちらを見せる）。
+   **要素は残したまま opacity だけ落とす**ので、CRITICAL表示もWIN表示も
+   HUDも背景も動かない。撃破の演出とは並行に走る（待ち合わせない）。 */
+.battle-tap .battle-enemy-stage[data-killed] > .battle-enemy {
+  animation: enemy-defeated var(--enemy-defeat) steps(1, end) forwards;
+}
+
+@keyframes enemy-defeated {
+  0%   { opacity: 1; filter: none; }
+  12%  { opacity: 1; filter: brightness(6) saturate(0); }
+  24%  { opacity: 1; filter: none; }
+  36%  { opacity: 0.15; filter: brightness(6) saturate(0); }
+  48%  { opacity: 1; filter: none; }
+  60%  { opacity: 0.15; filter: brightness(8) saturate(0); }
+  72%  { opacity: 1; filter: brightness(6) saturate(0); }
+  100% { opacity: 0; filter: brightness(8) saturate(0); }
+}
+
+@keyframes miss-fade {
+  0% { opacity: 0.2; }
+  100% { opacity: 1; }
+}
+
+@keyframes critical-pop {
+  0% { opacity: 0; transform: scale(0.88); }
+  45% { opacity: 1; transform: scale(1.08); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes critical-flash {
+  0% { filter: brightness(2.4) saturate(0.6); }
+  60% { filter: brightness(1.25); }
+  100% { filter: brightness(1); }
+}
+
+.battle-verdict {
+  margin: 0;
+  text-align: center;
+  font-size: 1.6rem;
+  letter-spacing: 0.2em;
+}
+
+.battle-verdict.win { color: var(--gold); }
+.battle-verdict.lose { color: var(--rarity-legend); }
+
+/* 5MISS後の追加判定。通常ターンとは別の枠で見せる。 */
+.extra-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+
+.extra-entry {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--gold);
+  border-radius: var(--radius);
+  font-size: 0.78rem;
+}
+
+.extra-entry.critical { border-style: solid; color: var(--gold); }
+.extra-kind { min-width: 0; overflow-wrap: anywhere; }
+.extra-detail { white-space: nowrap; color: var(--ink-dim); }
+
+.remaining {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.remaining .label { color: var(--ink-dim); font-size: 0.75rem; letter-spacing: 0.08em; }
+.remaining .marks { flex: 1; letter-spacing: 0.3em; color: var(--gold); }
+.remaining .marks .used { color: var(--panel-edge); }
+.remaining .count { font-size: 1.2rem; font-variant-numeric: tabular-nums; color: var(--gold); }
+
+/* 神格耐久。2回以上CRITICALが要る敵（いまは神だけ）にしか出ない。
+   残りTURNと同じ形にして、並んでも浮かないようにする。画像は使わない。 */
+.god-gauge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--rarity-legend);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.god-gauge .label {
+  color: var(--rarity-legend);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.god-gauge .marks { flex: 1; min-width: 0; letter-spacing: 0.3em; color: var(--rarity-legend); }
+/* 削れたぶんは中抜きにして落とす。 */
+.god-gauge .marks .broken { color: var(--panel-edge); }
+.god-gauge .count {
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--rarity-legend);
+  white-space: nowrap;
+}
+
+/* 一撃必殺。確定勝ちのときだけ「バトル開始」がこれに替わる（2つ並べない）。
+   大きさも位置も普通のボタンのまま。金枠と金文字で少しだけ強くする。 */
+button.instant-kill {
+  border-color: var(--gold);
+  color: #fff3d0;
+  background: linear-gradient(135deg, #8c2222 0%, #6b4d06 100%);
+  letter-spacing: 0.12em;
+  font-weight: bold;
+  /* 長い端末でも1行のまま。 */
+  white-space: nowrap;
+}
+
+button.instant-kill:disabled { opacity: 0.55; }
+
+/* 正式な赤金の台座が載ったときは、枠も下地も絵が持っている。
+   差は文字の金色と、ごく弱い金の光だけ（大きさも位置も動かさない）。 */
+button.instant-kill[data-art="true"] > .home-button-label {
+  color: #ffe9a8;
+  letter-spacing: 0.12em;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.9), 0 0 10px rgba(201, 162, 39, 0.75);
+}
+
+button.instant-kill[data-art="true"] > .home-button-art {
+  filter: drop-shadow(0 0 10px rgba(201, 162, 39, 0.45));
+}
+
+/* バトル前の特殊ルール告知。通常敵には出ない。 */
+.special-rule {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--rarity-legend);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.special-rule-label {
+  color: var(--rarity-legend);
+  font-size: 0.68rem;
+  font-weight: bold;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+
+.special-rule-body { flex: 1; min-width: 0; font-size: 0.85rem; overflow-wrap: anywhere; }
+
+/* --- WIN / LOSE ----------------------------------------------------------- */
+
+.result-title {
+  margin: 12px 0 0;
+  text-align: center;
+  font-size: 2.2rem;
+  letter-spacing: 0.15em;
+}
+
+.result-title.win { color: var(--gold); text-shadow: 0 0 16px rgba(201, 162, 39, 0.6); }
+.result-title.lose { color: var(--rarity-legend); }
+
+.result-diamonds {
+  margin: 0;
+  text-align: center;
+  font-size: 1.3rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 宝箱を開けたあとは主役が装備のカードへ移る。WINの見出しと獲得ダイヤは一歩引いて、
+   狭い端末でも 箱・装備・効果・NEXT が1画面に収まるようにする。 */
+.screen[data-chest="RESULT"] { gap: 6px; }
+.screen[data-chest="RESULT"] > .result-title { margin-top: 0; font-size: 1.7rem; }
+.screen[data-chest="RESULT"] > .result-diamonds { font-size: 1.05rem; }
+/* 開けた箱も NEW！ も添え物。狭い端末ではここも一段小さくして、NEXTまで収める。 */
+.screen[data-chest="RESULT"] .chest-box.opened { width: min(22vw, 84px); }
+.screen[data-chest="RESULT"] .new-large { font-size: 1.35rem; }
+
+.chest {
+  padding: 10px 12px;
+  border: 1px solid var(--gold);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.chest.none { text-align: center; color: var(--ink-dim); border-style: dashed; border-color: var(--panel-edge); }
+.chest p { margin: 0 0 6px; }
+
+/* 開けたあとの宝箱。箱と結果カードを縦に積む（中身はガチャと同じカード）。
+   枠はカード側が持っているので、こちらの枠と余白は外す（狭い端末で縦に効く）。 */
+.chest.opened {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.chest.opened > .gacha-result { align-self: stretch; }
+
+/* --- ガチャ --------------------------------------------------------------- */
+
+/*
+  引く前のガチャ画面の背景（宝物庫）。画面の端まで広げ、UIはその上へ重ねる。
+  絵のパスはCSSに書かない（AssetCatalog から View が <img> で差し込む）。
+  操作の邪魔をしないよう、この層はタップを一切受けない。
+*/
+.screen[data-screen="GACHA"],
+.screen[data-screen="BATTLE_PREP"],
+.screen[data-screen="BATTLE"],
+.screen[data-screen="WIN"],
+.screen[data-screen="LOSE"] { position: relative; }
+
+/* 背景以外（モーダルを除く）は背景より前。押せる場所が絵に埋もれない。 */
+.screen[data-screen="GACHA"] > *:not(.screen-backdrop):not(.modal-backdrop),
+.screen[data-screen="BATTLE_PREP"] > *:not(.screen-backdrop),
+.screen[data-screen="BATTLE"] > *:not(.screen-backdrop),
+.screen[data-screen="WIN"] > *:not(.screen-backdrop),
+.screen[data-screen="LOSE"] > *:not(.screen-backdrop) {
+  position: relative;
+  z-index: 1;
+}
+
+.screen-backdrop {
+  position: absolute;
+  top: calc(-1 * max(12px, env(safe-area-inset-top)));
+  bottom: calc(-1 * max(12px, env(safe-area-inset-bottom)));
+  left: -16px;
+  right: -16px;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* 縦横比は崩さず、画面を覆う。左右に黒帯が出ない。 */
+.screen-backdrop-art {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+/* 背景を消すためではなく、文字とボタンを読ませるための暗幕。 */
+.screen-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 8, 18, 0.45);
+}
+
+/* 箱を開けるあいだは主役を箱にしたいので、**同じ絵のまま暗幕だけ**を濃くする。
+   宝物庫だと分かる明るさは残す（真っ暗にはしない）。 */
+.screen-backdrop[data-dim="strong"]::after { background: rgba(5, 8, 18, 0.66); }
+
+/* 同じ背景のまま、場面ごとに暗幕だけを足す。
+   バトル前（strong）＜ バトル中（battle）＜ 結果（result）。
+   色の違いが分からなくなるほどは暗くしない。 */
+.screen-backdrop[data-dim="battle"]::after { background: rgba(5, 8, 18, 0.74); }
+.screen-backdrop[data-dim="result"]::after { background: rgba(5, 8, 18, 0.82); }
+
+/* 開ける箱。背景の財宝に紛れないよう、影で一段浮かせる。
+   **ガチャの画面だけ**で、戦闘の宝箱の見え方は変えない。 */
+.screen[data-screen="GACHA"] .chest-stage .chest-box,
+.screen[data-screen="GACHA"] > .chest-box {
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.75));
+}
+
+/* 「タップで開く」。背景の上でも読めるように影だけ足す（文言も出る間合いも変えない）。 */
+.screen[data-screen="GACHA"] .tap-hint {
+  color: var(--ink);
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95), 0 0 12px rgba(0, 0, 0, 0.7);
+}
+
+/* 進み具合（1/10 など）も同じく。 */
+.screen[data-screen="GACHA"] .gacha-progress { text-shadow: 0 2px 6px rgba(0, 0, 0, 0.9); }
+
+/* 見出しの行。左に画面名、右にHOMEと同じ宝石のダイヤ。 */
+.gacha-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 背景の上でも読めるように、見出しには影を入れる（色は今までの金のまま）。 */
+.gacha-head > .title {
+  margin: 0;
+  font-size: 1.25rem;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
+}
+
+/* ダイヤはHOMEと同じ枠。こちらは絵の上ではないので、その場に置くだけ。 */
+.gacha-head > .diamonds[data-art="true"] {
+  position: relative;
+  width: min(34vw, 132px);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* 引く前の主役。箱を大きく置いて、下に一言だけ添える。 */
+.gacha-idle-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 0;
+}
+
+/* 待機の3箱（木・赤・金）。上に2つ、下の真ん中に1つ。三角の塊に見せる。
+   背景の財宝に埋もれないよう、後ろへごく薄い暗がりだけ敷く。 */
+.gacha-idle-boxes {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  justify-content: center;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 0;
+}
+
+/* 待機の箱。**結果の箱ではない**ので押せないし、演出も出ない。
+   ゆっくり浮かせるだけ（CSSのループのみ。音も乱数も動かない）。 */
+.gacha-idle-boxes::before {
+  content: "";
+  position: absolute;
+  inset: -12% -8%;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(closest-side, rgba(5, 8, 18, 0.55) 0%, rgba(5, 8, 18, 0) 100%);
+}
+
+/* 3つとも**同じ大きさ**。金を大きくするのではなく、置き場所で主役に見せる。 */
+.chest-box.idle {
+  width: min(31vw, 122px);
+  cursor: default;
+  animation: chest-float 3.2s ease-in-out infinite;
+}
+
+/* 下の段の金箱。2列にまたがって真ん中へ。少し食い込ませて三角の塊にする。 */
+.chest-box.idle-bottom {
+  grid-column: 1 / -1;
+  justify-self: center;
+  margin-top: -14px;
+  position: relative;
+  z-index: 1;
+}
+
+/* 3つが同じ動きに見えないよう、箱ごとに位相をずらす。 */
+.chest-box.idle-top:first-child { animation-delay: -1.2s; }
+.chest-box.idle-top:nth-child(2) { animation-delay: -2s; }
+.chest-box.idle-bottom { animation-delay: -0.4s; }
+
+@keyframes chest-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chest-box.idle { animation: none; }
+}
+
+.gacha-lead {
+  margin: 0;
+  text-align: center;
+  color: var(--ink);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+  /* 背景の財宝の上に乗るので、少し強めの影で浮かせる。 */
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95), 0 0 12px rgba(0, 0, 0, 0.7);
+}
+
+/* HOMEへ戻るは透ける作りなので、背景の上では少しだけ下地を入れて読ませる。 */
+.screen[data-screen="GACHA"] .choices button.ghost:not([data-art="true"]) {
+  background: rgba(7, 8, 15, 0.66);
+  border-color: var(--panel-edge);
+  color: var(--ink);
+  backdrop-filter: blur(2px);
+}
+
+/* 引くボタン。この画面の主役の操作なので大きめ。縦に2つ。
+   将来ここを画像ボタンへ差し替えるときは、HOMEと同じ data-art の作りにする。 */
+.gacha-draws { gap: 8px; }
+button.gacha-draw { min-height: 56px; font-size: 1.05rem; font-weight: bold; }
+
+/* 正式な台座（赤金の枠）が載ったとき。枠のぶんだけ文字の面を内側へ取る。
+   絵は 900×183 で、縦の余白が少ないぶん HOME の枠より内側を広く使える。 */
+button.plate-main[data-art="true"] > .home-button-label {
+  left: 12%;
+  right: 12%;
+  top: 14%;
+  bottom: 16%;
+  font-size: clamp(0.9rem, 3.4vw, 1.1rem);
+  font-weight: bold;
+  letter-spacing: 0.04em;
+  /* 赤金の上でも読めるように、白文字＋濃いめの影。 */
+  color: #ffffff;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.9), 0 0 10px rgba(0, 0, 0, 0.6);
+}
+
+/*
+  結果を送る赤金（戦闘の NEXT／ガチャの 次へ・OK／チュートリアルの 次へ・はじめる）。
+  台座は引くボタンと**同じ1枚**なので、ここで決めるのは幅と押せる高さだけ。
+  絵は 900×183 と横長で、幅いっぱいに伸ばすと帯に見えるので少し詰めて中央へ置く。
+  （引くボタン・バトル開始は画面の主役なので、そちらは幅いっぱいのまま。）
+*/
+button.win-next[data-art="true"],
+button.gacha-advance[data-art="true"],
+button.tutorial-next[data-art="true"] {
+  min-height: 48px;
+  max-width: min(100%, 280px);
+  margin-inline: auto;
+}
+
+/* 下ごしらえの2つ（排出装備一覧 / 提供割合）。引くボタンより一段控えめに、横並び。 */
+.gacha-subs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+button.sub {
+  min-height: 48px;
+  padding: 8px 6px;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  /* 320の英語（EQUIPMENT LIST）でも切らずに2行で収める。 */
+  overflow-wrap: anywhere;
+}
+
+/* 正式な青枠が載ったとき。台座は2つで同じ1枚で、違うのは重ねる文字だけ。
+   絵は 900×229 と横長なので、半分の幅では背が低くなる。**押せる高さは
+   min-height で確保**して、絵はその中で中央に置く。 */
+button.plate-sub[data-art="true"] {
+  min-height: 48px;
+  padding: 0;
+}
+
+button.plate-sub[data-art="true"] > .home-button-label {
+  left: 13%;
+  right: 13%;
+  top: 22%;
+  bottom: 24%;
+  /* 320の英語（EQUIPMENT LIST）も1行で収める。 */
+  font-size: clamp(0.66rem, 2.6vw, 0.85rem);
+  font-weight: bold;
+  letter-spacing: 0.01em;
+  color: #ffffff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.6);
+}
+
+/* 「戻る」「HOMEへ戻る」「閉じる」の黒銀の台座。**どこでも同じ1枚**で、
+   違うのは重ねる文字だけ。赤金（進める）・青金（脇）より控えめに見せる。
+   絵は 900×198 と横長なので、押せる高さは min-height で別に確保する。 */
+button.back-button[data-art="true"] {
+  min-height: 48px;
+  padding: 0;
+}
+
+button.back-button[data-art="true"] > .home-button-label {
+  left: 14%;
+  right: 14%;
+  top: 20%;
+  bottom: 22%;
+  font-size: clamp(0.78rem, 3vw, 0.95rem);
+  color: var(--ink);
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* モーダルの中では控えめに。幅だけ詰めて中央へ置く（絵は同じ1枚）。 */
+button.back-button.modal-close[data-art="true"] {
+  width: min(78%, 220px);
+  margin-inline: auto;
+}
+
+/* バトル前は縦に余裕がないので、こちらも幅を詰めて背を低くする
+   （絵は同じ1枚。狭い端末で「戻る」が画面の外へ出ないようにするため）。 */
+/*
+  バトル前の3つ。**絵は使い回し**で、役割は色で分ける。
+    バトル開始 / 一撃必殺 → 赤金（いちばん目立つ。幅いっぱい）
+    装備変更             → 青金（一段控えめ）
+    戻る                 → 黒銀（いちばん控えめ）
+  絵の縦横比が3枚とも違うので、**幅で背の高さを揃えて**赤 > 青 > 黒銀の順にする。
+  上のバトル前の選択ボタン一括指定より強く当てて、絵のまわりの余白を外す。
+*/
+.screen[data-screen="BATTLE_PREP"] > .choices button[data-art="true"] {
+  padding: 0;
+  min-height: 48px;
+  margin-inline: auto;
+}
+
+.screen[data-screen="BATTLE_PREP"] button.plate-sub[data-art="true"] { max-width: min(100%, 210px); }
+.screen[data-screen="BATTLE_PREP"] button.back-button[data-art="true"] { max-width: min(100%, 190px); }
+
+/* 背の低い端末では3つとも幅を詰めて、下まで収まる側へ寄せる（順序は保つ）。 */
+@media (max-height: 640px) {
+  .screen[data-screen="BATTLE_PREP"] > .choices button[data-art="true"] { max-width: min(100%, 215px); }
+  .screen[data-screen="BATTLE_PREP"] button.plate-sub[data-art="true"] { max-width: min(100%, 185px); }
+  .screen[data-screen="BATTLE_PREP"] button.back-button[data-art="true"] { max-width: min(100%, 170px); }
+}
+
+/* 提供割合。画面は移らず、同じ画面の上へ重ねる。 */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(3, 4, 8, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.modal {
+  width: min(92vw, 320px);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--gold);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+}
+
+.modal-title {
+  margin: 0 0 10px;
+  color: var(--gold);
+  font-size: 1rem;
+  letter-spacing: 0.1em;
+  text-align: center;
+}
+
+.modal .rate-list { margin: 0 0 12px; }
+.modal button { width: 100%; }
+
+/* 提供割合。数値は gacha-catalog から来る。 */
+.rates { font-size: 0.9rem; }
+
+.rate-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.rate { display: flex; justify-content: space-between; }
+.rate-rarity { color: var(--gold); }
+.rate-value { font-variant-numeric: tabular-nums; }
+
+.gacha-progress {
+  margin: 0;
+  text-align: center;
+  color: var(--gold);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+}
+
+.chest-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 箱は4種類。正式アートが来るまでは色と枠だけで見分ける。
+   どの箱からも全レアが出る（木箱からLEGENDも出る）ので、箱に「N/R確定」等は書かない。 */
+.chest-box {
+  width: min(52vw, 190px);
+  aspect-ratio: 1 / 1;
+  border-radius: 14px;
+  border: 3px solid var(--panel-edge);
+  background: var(--panel);
+  position: relative;
+}
+
+/* 蓋の線。開封すると持ち上がる。 */
+.chest-box::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 30%;
+  height: 3px;
+  background: currentColor;
+  opacity: 0.65;
+  transform-origin: left center;
+  transition: transform var(--gacha-open) ease-out, opacity var(--gacha-open) ease-out;
+}
+
+.chest-box.wood {
+  color: #c9925a;
+  border-color: #7a4f27;
+  background: linear-gradient(160deg, #6b4423 0%, #3a2413 100%);
+}
+
+.chest-box.red {
+  color: #ff9a92;
+  border-color: #a12a2a;
+  background: linear-gradient(160deg, #8c2222 0%, #3d1010 100%);
+}
+
+.chest-box.gold {
+  color: #ffe9a8;
+  border-color: var(--gold);
+  background: linear-gradient(160deg, #b4901f 0%, #4a3a08 100%);
+  box-shadow: 0 0 18px rgba(201, 162, 39, 0.45);
+}
+
+.chest-box.rainbow {
+  color: #ffffff;
+  border-color: #ffffff;
+  background: linear-gradient(140deg, #8b2fd6 0%, #2f7ad6 30%, #2fd6a0 55%, #d6c22f 78%, #d62f6b 100%);
+  box-shadow: 0 0 26px rgba(255, 255, 255, 0.45);
+}
+
+/* 正式アートが来たらCSSの箱の上に重ねる。無ければCSSの箱がそのまま見える。 */
+.chest-art {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.chest-box > .chest-art { position: absolute; inset: 0; max-width: 100%; max-height: 100%; }
+
+/* 正式アートが読めたときは仮箱を隠して絵だけを見せる。
+   404 のときは View が data-art を外すので、そのままCSSの箱へ戻る。
+   枠と大きさは border ごと残す（box-sizing: border-box）ので、
+   絵があってもボタンや結果テキストの位置は動かない。 */
+.chest-box[data-art="true"] {
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+}
+
+.chest-box[data-art="true"]::before { content: none; }
+
+/* バトルのドロップ宝箱。**器はガチャの箱と同じ**（chest-stage / chest-box）で、
+   絵が無いときの下地だけ木箱ふうに描き分ける。大きさも動きもガチャと同じ。 */
+.chest-box.battle-chest:not([data-art="true"]) {
+  border-color: var(--gold);
+  background: linear-gradient(160deg, #6b4423 0%, #3a2413 100%);
+}
+
+/* 「宝箱を手に入れた！」の1行。箱の上へ小さく添える。 */
+.chest-stage > .chest-head {
+  margin: 0;
+  color: var(--gold);
+  font-size: 0.9rem;
+  letter-spacing: 0.1em;
+  text-align: center;
+}
+
+/* 結果画面では箱が単独で並ぶので、中央に置く（箱の台の中にいるときは台が中央に寄せる）。 */
+.screen > .chest-box { align-self: center; }
+
+/* 開けたあとの主役は引いた装備なので、箱は一歩引く。
+   演出（chest-open のフラッシュ）とテンポはそのままで、大きさと濃さだけ下げる。
+   これで狭い端末でも 絵・名前・効果・ダイヤ・OK が1画面に収まる。 */
+.chest-box.opened {
+  width: min(28vw, 104px);
+  opacity: 0.7;
+}
+
+.chest-box.arriving { animation: chest-in var(--gacha-chest-in) ease-out; }
+
+/* 木箱LEGENDの昇格。煙が箱の中央から立ちのぼり、いちばん濃いところで
+   裏が虹箱へ入れ替わる。入れ替わる瞬間はこの煙に隠れて見えない。 */
+.chest-smoke {
+  position: absolute;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+  width: 190%;
+  aspect-ratio: 1 / 1;
+  background-repeat: no-repeat;
+  background-color: transparent;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* 煙のあいだは押せない。押しても何も起きないことが見て分かるようにする。 */
+.chest-stage[data-promoting] { cursor: default; pointer-events: none; }
+
+/* 虹箱になったあと。入れ替わりは煙の裏で済んでいるので、
+   煙が晴れた時点では**動かさない**。見せるための時間なので、
+   その場に静止させる（描き直すたびに跳ねないようにもしている）。 */
+.chest-box.promoted { animation: none; }
+
+/* 昇格のあいだ、タップ案内は伏せるだけ。行の高さは残すので箱が動かない。 */
+.tap-hint[data-hidden] { visibility: hidden; }
+.chest-box.opened { animation: chest-open var(--gacha-open) ease-out; }
+.chest-box.opened::before { transform: rotate(-16deg) translateY(-10px); opacity: 0.25; }
+
+@keyframes chest-in {
+  0% { transform: translateY(-24px) scale(0.85); opacity: 0; }
+  70% { transform: translateY(4px) scale(1.04); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@keyframes chest-open {
+  0% { transform: scale(1); filter: brightness(1); }
+  35% { transform: scale(1.08) rotate(-2deg); filter: brightness(2.2); }
+  60% { transform: scale(1.02) rotate(2deg); filter: brightness(1.4); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+
+/* 1回ぶんの結果。引いた装備を鑑賞する場所なので、絵を中央の主役にして
+   NEW → 絵 → 名前 → レア度 → 効果 の順に縦へ積む。金枠はそのまま。 */
+.gacha-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* NEW が無い回はこの gap ぶんしか詰まらない（空きが残らない）。 */
+  gap: 6px;
+  padding: 14px 12px 16px;
+  border: 1px solid var(--gold);
+  border-radius: var(--radius);
+  background: var(--panel);
+  text-align: center;
+  animation: result-in var(--gacha-result) ease-out;
+}
+
+@keyframes result-in {
+  0% { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.gacha-result p { margin: 0; max-width: 100%; }
+
+.new-large {
+  color: var(--gold);
+  font-size: 1.8rem;
+  line-height: 1.2;
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 14px rgba(201, 162, 39, 0.7);
+}
+
+/* 主役の装備アイコン。正方形で固定なので、どの装備でも下の文字の位置が動かない。
+   狭い端末では vw 側が効いて縮む（320px→128px / 375px以上→150px）。
+   絵そのものが十分派手なので、glow や飾りはここで足さない。 */
+.result-art {
+  position: relative;
+  width: min(40vw, 150px);
+  max-width: 100%;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* 絵があるときは枠も下地も置かない（イラストをそのまま見せる）。
+   404 で絵が無いときだけ、同じ大きさの枠に略号を出す。 */
+.result-art:not([data-art="true"]) {
+  border: 1px solid var(--panel-edge);
+  border-radius: 12px;
+  background: #05060c;
+}
+
+.result-art-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 12px;
+}
+
+/* 絵があるときは略号を出さない（イラストを隠さないことを優先）。
+   404 なら View が data-art を外し、同じ枠の中に略号だけが残る。 */
+.result-art .icon-mark { font-size: 1.7rem; font-weight: bold; letter-spacing: 0.06em; color: var(--ink-dim); }
+.result-art[data-art="true"] .icon-mark { display: none; }
+
+/* --- ガチャ開封のレア度別演出 --------------------------------------------- */
+
+/* スプライトは装備の絵の真上で回す。**レイアウトには一切効かない**
+   （position: absolute ＋ visibility なので、ダイヤもOKボタンも動かない）。
+   コマ送りは View が background-position を書き換えるだけ。 */
+.gacha-fx {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  aspect-ratio: 1 / 1;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  /* シートの透過をそのまま使う。黒地は敷かない。 */
+  background-color: transparent;
+  /* 伏せてあるカードの中でも、演出だけは見せる。 */
+  visibility: visible;
+  z-index: 2;
+}
+
+.gacha-fx[data-fx="gacha_fx_shimmer"] { width: min(58vw, 220px); }
+.gacha-fx[data-fx="gacha_fx_unleash"] { width: min(76vw, 300px); }
+
+/* UR / LEGEND は出現SEが鳴り終わるまで結果を送れない。
+   押せないことが見て分かるだけで、大きさも位置も変えない（下の並びを動かさない）。 */
+#gacha-next[data-locked] {
+  opacity: 0.45;
+  pointer-events: none;
+  filter: saturate(0.6);
+}
+
+/* 演出のあいだはカードの中身を伏せる。visibility なので**高さは変わらない**。 */
+.gacha-result[data-fx-pending="true"] > * { visibility: hidden; }
+
+/* 演出は装備の枠より大きいので、回しているあいだだけ枠の外まで見せる。 */
+.gacha-result[data-fx] .result-art { overflow: visible; }
+
+.result-name {
+  font-size: 1.15rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* レア度は名前の添え物。名前より目立たせない。 */
+.result-rarity {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  letter-spacing: 0.12em;
+  padding: 1px 9px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--ink-dim);
+}
+
+.result-rarity.rarity-N { color: var(--rarity-n); }
+.result-rarity.rarity-R { color: var(--rarity-r); }
+.result-rarity.rarity-SR { color: var(--rarity-sr); }
+.result-rarity.rarity-SSR { color: var(--rarity-ssr); }
+.result-rarity.rarity-UR { color: var(--rarity-ur); }
+.result-rarity.rarity-LEGEND { color: var(--rarity-legend); }
+
+.result-description { color: var(--ink-dim); font-size: 0.88rem; overflow-wrap: anywhere; }
+.result-duplicate { color: var(--blue); }
+
+.gacha-summary {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.summary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.summary-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 0.9rem; }
+.summary-duplicate { color: var(--ink-dim); font-size: 0.78rem; white-space: nowrap; }
+
+/* --- 敵図鑑 --------------------------------------------------------------- */
+
+.book-count {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+}
+
+.book-count.complete { border-color: var(--gold); color: var(--gold); }
+
+.book-rewards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.book-reward {
+  display: flex;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+
+.book-reward.claimed { border-color: var(--gold); color: var(--gold); }
+.reward-count { font-variant-numeric: tabular-nums; }
+
+/* 2列。狭い端末でも敵名が2〜3行で読める。 */
+.book-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.enemy-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+  cursor: pointer;
+  /* 指で押せる大きさ。 */
+  min-height: 56px;
+}
+
+.enemy-card.selected { border-color: var(--gold); }
+
+.enemy-thumb {
+  display: block;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  border: 1px solid var(--panel-edge);
+  background: radial-gradient(circle at 50% 60%, #1a1f33 0%, #0b0e1a 70%);
+  object-fit: cover;
+}
+
+/* 未撃破はシルエット。元の絵は読み込まないうえ、見た目でも塗り潰す。 */
+.enemy-thumb[data-silhouette="true"] {
+  background: #05060c;
+  filter: brightness(0);
+}
+
+/* 未撃破はシルエット扱い。名前も伏せる。 */
+.enemy-card.unknown { opacity: 0.55; }
+.enemy-card.unknown .enemy-thumb { background: #05060c; }
+.enemy-card.unknown .enemy-card-name { color: var(--ink-dim); letter-spacing: 0.1em; }
+
+.enemy-card-name {
+  min-width: 0;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  /* 長い敵名は3行まで。横へはあふれさせない。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.book-special { display: flex; flex-direction: column; gap: 4px; }
+.book-special-label { margin: 0; color: var(--gold); font-size: 0.72rem; letter-spacing: 0.15em; }
+.book-special .book-grid { grid-template-columns: minmax(0, 1fr); }
+
+.book-detail {
+  padding: 10px 12px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.book-detail.empty, .book-detail.unknown { color: var(--ink-dim); }
+.book-detail p { margin: 0 0 6px; overflow-wrap: anywhere; }
+.book-detail .detail-name { color: var(--gold); font-size: 1rem; }
+.detail-art { height: 26vh; max-height: 160px; margin-bottom: 8px; }
+
+.detail-stats {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-stat {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.detail-stat .stat-label { color: var(--ink-dim); }
+.detail-stat .stat-value { color: var(--gold); font-variant-numeric: tabular-nums; }
+.detail-quote { font-style: italic; color: var(--ink-dim); font-size: 0.85rem; overflow-wrap: anywhere; }
+.detail-profile { font-size: 0.85rem; overflow-wrap: anywhere; }
+
+/* --- RECORD --------------------------------------------------------------- */
+
+/*
+  戦績のカード。アーカイブ全体の黒＋濃紺に合わせ、枠は薄い青銀、数字は金。
+  **数字が主役**なので、ラベルより数字を大きくする。
+  並び：基本6記録（2列×3段）→ 最多使用装備 → 最も苦戦した敵 → 表クリア → 最終クリア。
+  値はすべて RecordState のまま（View は並べるだけ）。
+*/
+:root {
+  --record-edge: rgba(150, 172, 214, 0.34);
+  --record-bg: linear-gradient(180deg, #111829 0%, #0a0e1a 100%);
+  --record-inset: inset 0 1px 0 rgba(200, 215, 245, 0.06), inset 0 -8px 16px rgba(0, 0, 0, 0.35);
+  --record-number: #f2cf5b;
+}
+
+.record-section {
+  margin: 4px 0 0;
+  color: var(--gold);
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+}
+
+.record-totals { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+.record-stats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.record-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 72px;
+  padding: 8px 6px;
+  border: 1px solid var(--record-edge);
+  border-radius: 8px;
+  background: var(--record-bg);
+  box-shadow: var(--record-inset);
+  text-align: center;
+}
+
+.record-label {
+  color: #d6dae4;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.record-value {
+  min-width: 0;
+  color: var(--record-number);
+  font-size: clamp(1.4rem, 7vw, 1.75rem);
+  font-weight: bold;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+
+/* 最多使用装備・最も苦戦した敵。狭い端末でも名前を切らないよう縦に積む。 */
+.record-features { display: flex; flex-direction: column; gap: 8px; }
+
+.record-feature {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--record-edge);
+  border-radius: 8px;
+  background: var(--record-bg);
+  box-shadow: var(--record-inset);
+}
+
+.record-feature-title {
+  margin: 0 0 6px;
+  color: var(--gold);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+}
+
+.record-feature-body { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+/* 絵の枠。装備は既存のアイコン（レア度の札つき）を大きくするだけ。 */
+.record-feature-art {
+  flex: none;
+  width: 60px;
+  min-width: 60px;
+  height: 60px;
+  border-radius: 8px;
+}
+.record-feature-art.icon { font-size: 1.1rem; }
+.record-feature-art.enemy,
+.record-feature-art.empty {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--record-edge);
+  background: radial-gradient(circle at 50% 60%, #1a1f33 0%, #0b0e1a 70%);
+}
+.record-feature-enemy { display: block; width: 100%; height: 100%; object-fit: contain; }
+
+.record-feature-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+
+/* 長い敵名（「今日はなんとなく世界を滅ぼせそうな魔王」など）は2行で収める。省略しない。 */
+.record-feature-name {
+  font-size: 0.9rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.record-feature-count {
+  color: var(--record-number);
+  font-size: 1.35rem;
+  font-weight: bold;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.record-feature[data-empty="true"] .record-feature-name { color: var(--ink-dim); }
+
+/* クリア時の記録。到達済みは実データ、未達成は暗い点線の LOCKED。 */
+.record-clear {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(201, 162, 39, 0.45);
+  border-radius: var(--radius);
+  background: var(--record-bg);
+  box-shadow: var(--record-inset);
+}
+
+.record-clear-title {
+  margin: 0;
+  color: var(--gold);
+  font-size: 0.85rem;
+  font-weight: bold;
+  letter-spacing: 0.08em;
+}
+
+.record-clear.locked {
+  align-items: center;
+  gap: 4px;
+  border: 1px dashed var(--record-edge);
+  background: #080a12;
+  box-shadow: none;
+  text-align: center;
+}
+.record-clear.locked .record-clear-title { align-self: stretch; text-align: left; color: #9aa3b6; }
+.record-locked {
+  margin: 4px 0 0;
+  color: #8f98ad;
+  font-size: 1.1rem;
+  font-weight: bold;
+  letter-spacing: 0.3em;
+}
+.record-locked-hint { margin: 0; color: var(--ink-dim); font-size: 0.75rem; overflow-wrap: anywhere; }
+
+/* クリア済みなのに記録が無い（記録の仕組みより前のセーブ）。LOCKED より字間を詰めて長い文言を収める。 */
+.record-clear.locked[data-missing="true"] .record-locked {
+  color: #b9c2d6;
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+  overflow-wrap: anywhere;
+}
+
+/* クリア時の記録の中は一段小さく（並びは同じ）。 */
+.record-totals.compact .record-stats { gap: 6px; }
+.record-totals.compact .record-stat { min-height: 58px; padding: 6px 4px; }
+.record-totals.compact .record-label { font-size: 0.72rem; }
+.record-totals.compact .record-value { font-size: 1.2rem; }
+.record-totals.compact .record-feature { padding: 8px 10px; }
+.record-totals.compact .record-feature-art { width: 44px; min-width: 44px; height: 44px; }
+.record-totals.compact .record-feature-art.icon { font-size: 0.8rem; }
+.record-totals.compact .record-feature-count { font-size: 1.05rem; }
+
+.record-clear-sub { margin: 2px 0 0; color: #d6dae4; font-size: 0.78rem; }
+
+.record-empty-slot {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--panel-edge);
+  border-radius: var(--radius);
+  color: var(--ink-dim);
+  font-size: 0.85rem;
+}
+
+.record-equipment {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+
+.record-equipment-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--record-edge);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+/* --- エンディング --------------------------------------------------------- */
+
+.ending-title {
+  margin: 16px 0 4px;
+  text-align: center;
+  letter-spacing: 0.12em;
+  overflow-wrap: anywhere;
+}
+
+/* 通常は静か。終わったように見せつつ、まだ何かある気配を残す。 */
+.ending-title.normal {
+  color: var(--ink-dim);
+  font-size: clamp(1.4rem, 7vw, 2rem);
+  text-shadow: 0 0 10px rgba(47, 90, 168, 0.35);
+}
+
+/* 最終クリアははっきり明るく。 */
+.ending-title.true {
+  color: var(--gold);
+  font-size: clamp(1.7rem, 9vw, 2.6rem);
+  text-shadow: 0 0 20px rgba(201, 162, 39, 0.75);
+}
+
+/* HOMEの補助ボタン（記録）。メインの導線より控えめにする。 */
+.sub-menu { display: flex; justify-content: center; }
+button.small { min-height: 34px; padding: 4px 18px; font-size: 0.82rem; }
